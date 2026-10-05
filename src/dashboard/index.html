@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Distributed Scheduler & Workflow Engine Dashboard</title>
+    <!-- React & Babel CDNs -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #0f172a; color: #f8fafc; padding: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #334155; }
+        .title { font-size: 24px; font-weight: 700; color: #38bdf8; }
+        .btn { background: #0284c7; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+        .btn:hover { background: #0369a1; }
+        .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
+        .card { background: #1e293b; border-radius: 8px; padding: 20px; border: 1px solid #334155; }
+        .card-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+        
+        /* SVG DAG Canvas */
+        .svg-container { width: 100%; height: 420px; background: #0b0f19; border-radius: 6px; border: 1px solid #1e293b; overflow: auto; }
+        
+        /* State Colors */
+        .state-PENDING { fill: #475569; stroke: #64748b; }
+        .state-READY { fill: #0284c7; stroke: #38bdf8; }
+        .state-RUNNING { fill: #d97706; stroke: #fbbf24; animation: pulse 1.5s infinite; }
+        .state-SUCCESS { fill: #16a34a; stroke: #4ade80; }
+        .state-FAILED { fill: #dc2626; stroke: #f87171; }
+        .state-RETRYING { fill: #9333ea; stroke: #c084fc; }
+        .state-DEAD { fill: #991b1b; stroke: #ef4444; }
+
+        @keyframes pulse {
+            0% { opacity: 1.0; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1.0; }
+        }
+
+        /* Logs Console */
+        .console { background: #090d16; font-family: monospace; font-size: 13px; height: 380px; overflow-y: auto; padding: 12px; border-radius: 6px; border: 1px solid #1e293b; }
+        .log-entry { margin-bottom: 6px; color: #cbd5e1; }
+        .log-time { color: #64748b; margin-right: 8px; }
+        .log-event { color: #38bdf8; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const STATE_COLORS = {
+            PENDING: '#475569',
+            READY: '#0284c7',
+            RUNNING: '#d97706',
+            SUCCESS: '#16a34a',
+            FAILED: '#dc2626',
+            RETRYING: '#9333ea',
+            DEAD: '#991b1b'
+        };
+
+        function DashboardApp() {
+            const [nodes, setNodes] = useState([
+                { id: 'extract', name: 'Extract Data', x: 100, y: 200, state: 'SUCCESS' },
+                { id: 'transform_a', name: 'Clean & Validate', x: 300, y: 120, state: 'RUNNING' },
+                { id: 'transform_b', name: 'Aggregate Metrics', x: 300, y: 280, state: 'READY' },
+                { id: 'load', name: 'Load Warehouse', x: 500, y: 200, state: 'PENDING' }
+            ]);
+
+            const [edges] = useState([
+                { from: 'extract', to: 'transform_a' },
+                { from: 'extract', to: 'transform_b' },
+                { from: 'transform_a', to: 'load' },
+                { from: 'transform_b', to: 'load' }
+            ]);
+
+            const [logs, setLogs] = useState([
+                { time: new Date().toLocaleTimeString(), event: 'SYSTEM', msg: 'Engine started. Custom SVG DAG initialized.' }
+            ]);
+
+            const triggerWorkflow = async () => {
+                setLogs(prev => [{ time: new Date().toLocaleTimeString(), event: 'TRIGGER', msg: 'Triggering ETL Pipeline Workflow Run...' }, ...prev]);
+                try {
+                    const res = await fetch('http://localhost:8000/api/workflows/api-wf-1/trigger', { method: 'POST' });
+                    const data = await res.json();
+                    setLogs(prev => [{ time: new Date().toLocaleTimeString(), event: 'RUN_STARTED', msg: `Workflow Run ${data.run_id} started.` }, ...prev]);
+                } catch (e) {
+                    setLogs(prev => [{ time: new Date().toLocaleTimeString(), event: 'ERROR', msg: 'Could not connect to API server.' }, ...prev]);
+                }
+            };
+
+            return (
+                <div>
+                    <div className="header">
+                        <div>
+                            <div className="title">Distributed Job Scheduler & Workflow Engine</div>
+                            <div style={{ color: '#64748b', fontSize: '14px', marginTop: '4px' }}>Real-Time DAG State Telemetry & In-Memory Execution Metrics</div>
+                        </div>
+                        <button className="btn" onClick={triggerWorkflow}>Trigger Workflow Run</button>
+                    </div>
+
+                    <div className="grid">
+                        <div className="card">
+                            <div className="card-title">Hand-Drawn Live SVG DAG Topology</div>
+                            <div className="svg-container">
+                                <svg width="100%" height="100%" viewBox="0 0 650 400">
+                                    <defs>
+                                        <marker id="arrow" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                            <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
+                                        </marker>
+                                    </defs>
+
+                                    {/* Directed Dependency Edges */}
+                                    {edges.map((e, idx) => {
+                                        const source = nodes.find(n => n.id === e.from);
+                                        const target = nodes.find(n => n.id === e.to);
+                                        if (!source || !target) return null;
+                                        return (
+                                            <line
+                                                key={idx}
+                                                x1={source.x}
+                                                y1={source.y}
+                                                x2={target.x}
+                                                y2={target.y}
+                                                stroke="#334155"
+                                                strokeWidth="2.5"
+                                                markerEnd="url(#arrow)"
+                                            />
+                                        );
+                                    })}
+
+                                    {/* DAG Nodes */}
+                                    {nodes.map(n => (
+                                        <g key={n.id} transform={`translate(${n.x}, ${n.y})`}>
+                                            <circle r="22" className={`state-${n.state}`} strokeWidth="3" />
+                                            <text y="38" textAnchor="middle" fill="#e2e8f0" fontSize="13" fontWeight="600">{n.name}</text>
+                                            <text y="-28" textAnchor="middle" fill="#94a3b8" fontSize="11">{n.state}</text>
+                                        </g>
+                                    ))}
+                                </svg>
+                            </div>
+                        </div>
+
+                        <div className="card">
+                            <div className="card-title">Live Execution Logs</div>
+                            <div className="console">
+                                {logs.map((l, idx) => (
+                                    <div key={idx} className="log-entry">
+                                        <span className="log-time">[{l.time}]</span>
+                                        <span className="log-event">{l.event}:</span> {l.msg}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<DashboardApp />);
+    </script>
+</body>
+</html>
