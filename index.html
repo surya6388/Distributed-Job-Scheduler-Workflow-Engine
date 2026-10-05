@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Distributed Scheduler & Workflow Engine</title>
+    <!-- React 18 & Babel CDNs -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #0f172a; color: #f8fafc; min-height: 100vh; padding: 24px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #334155; }
+        .title { font-size: 24px; font-weight: 700; color: #38bdf8; }
+        .subtitle { font-size: 14px; color: #94a3b8; margin-top: 4px; }
+        .btn { background: #0284c7; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .btn:hover { background: #0369a1; transform: translateY(-1px); }
+        .btn:active { transform: translateY(0); }
+        .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
+        .card { background: #1e293b; border-radius: 10px; padding: 20px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3); }
+        .card-title { font-size: 14px; font-weight: 600; margin-bottom: 16px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+        
+        /* Interactive SVG DAG Canvas */
+        .svg-container { width: 100%; height: 440px; background: #090d16; border-radius: 8px; border: 1px solid #1e293b; position: relative; }
+        
+        /* Node State Styles */
+        .node-circle { transition: all 0.3s ease; cursor: pointer; }
+        .state-PENDING { fill: #334155; stroke: #64748b; }
+        .state-READY { fill: #0284c7; stroke: #38bdf8; }
+        .state-RUNNING { fill: #d97706; stroke: #fbbf24; animation: pulse 1.2s infinite; }
+        .state-SUCCESS { fill: #16a34a; stroke: #4ade80; }
+        .state-FAILED { fill: #dc2626; stroke: #f87171; }
+        .state-RETRYING { fill: #9333ea; stroke: #c084fc; }
+
+        @keyframes pulse {
+            0% { opacity: 1.0; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.05); }
+            100% { opacity: 1.0; transform: scale(1); }
+        }
+
+        /* Stat Badges */
+        .stats-row { display: flex; gap: 12px; margin-bottom: 16px; }
+        .stat-badge { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 10px 14px; flex: 1; text-align: center; }
+        .stat-val { font-size: 20px; font-weight: 700; color: #f8fafc; }
+        .stat-lbl { font-size: 11px; color: #64748b; text-transform: uppercase; margin-top: 2px; }
+
+        /* Execution Console */
+        .console { background: #050811; font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 12.5px; height: 380px; overflow-y: auto; padding: 14px; border-radius: 6px; border: 1px solid #1e293b; line-height: 1.6; }
+        .log-line { margin-bottom: 4px; color: #cbd5e1; word-break: break-all; }
+        .log-ts { color: #64748b; margin-right: 8px; }
+        .log-tag { color: #38bdf8; font-weight: 600; margin-right: 6px; }
+        .log-success { color: #4ade80; }
+        .log-warn { color: #fbbf24; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const INITIAL_NODES = [
+            { id: 'extract', name: 'Extract Database', x: 90, y: 220, state: 'SUCCESS', weight: 2 },
+            { id: 'transform_a', name: 'Transform Spark', x: 280, y: 130, state: 'SUCCESS', weight: 5 },
+            { id: 'transform_b', name: 'Feature Engineering', x: 280, y: 310, state: 'RUNNING', weight: 3 },
+            { id: 'load', name: 'Load Warehouse', x: 500, y: 220, state: 'PENDING', weight: 4 }
+        ];
+
+        const INITIAL_EDGES = [
+            { from: 'extract', to: 'transform_a' },
+            { from: 'extract', to: 'transform_b' },
+            { from: 'transform_a', to: 'load' },
+            { from: 'transform_b', to: 'load' }
+        ];
+
+        function DashboardApp() {
+            const [nodes, setNodes] = useState(INITIAL_NODES);
+            const [edges] = useState(INITIAL_EDGES);
+            const [isRunning, setIsRunning] = useState(false);
+            const [logs, setLogs] = useState([
+                { ts: new Date().toLocaleTimeString(), tag: 'INIT', msg: 'Scheduler engine active. In-memory min-heap ready.' },
+                { ts: new Date().toLocaleTimeString(), tag: 'DAG', msg: 'Loaded topology: 4 nodes, 4 edges. In-degree map updated.' }
+            ]);
+
+            const triggerRun = () => {
+                if (isRunning) return;
+                setIsRunning(true);
+                setLogs(prev => [{ ts: new Date().toLocaleTimeString(), tag: 'RUN', msg: 'Triggered new workflow execution run: run-8f92a1' }, ...prev]);
+
+                // Reset nodes to pending except extract
+                setNodes([
+                    { id: 'extract', name: 'Extract Database', x: 90, y: 220, state: 'RUNNING', weight: 2 },
+                    { id: 'transform_a', name: 'Transform Spark', x: 280, y: 130, state: 'PENDING', weight: 5 },
+                    { id: 'transform_b', name: 'Feature Engineering', x: 280, y: 310, state: 'PENDING', weight: 3 },
+                    { id: 'load', name: 'Load Warehouse', x: 500, y: 220, state: 'PENDING', weight: 4 }
+                ]);
+
+                // Step 1: Extract finishes -> unlocks Transform A & B
+                setTimeout(() => {
+                    setNodes(prev => prev.map(n => {
+                        if (n.id === 'extract') return { ...n, state: 'SUCCESS' };
+                        if (n.id === 'transform_a' || n.id === 'transform_b') return { ...n, state: 'RUNNING' };
+                        return n;
+                    }));
+                    setLogs(prev => [{ ts: new Date().toLocaleTimeString(), tag: 'LEASE', msg: 'Worker worker-1 claimed extract task. Completed successfully.' }, ...prev]);
+                }, 1500);
+
+                // Step 2: Transform A & B finish -> unlocks Load
+                setTimeout(() => {
+                    setNodes(prev => prev.map(n => {
+                        if (n.id === 'transform_a' || n.id === 'transform_b') return { ...n, state: 'SUCCESS' };
+                        if (n.id === 'load') return { ...n, state: 'RUNNING' };
+                        return n;
+                    }));
+                    setLogs(prev => [{ ts: new Date().toLocaleTimeString(), tag: 'KAHN', msg: 'In-degree for node load reached 0. Unlocked to READY queue.' }, ...prev]);
+                }, 3200);
+
+                // Step 3: Load finishes -> Workflow complete
+                setTimeout(() => {
+                    setNodes(prev => prev.map(n => ({ ...n, state: 'SUCCESS' })));
+                    setLogs(prev => [{ ts: new Date().toLocaleTimeString(), tag: 'SUCCESS', msg: 'Workflow run run-8f92a1 completed successfully. 4/4 tasks SUCCESS.' }, ...prev]);
+                    setIsRunning(false);
+                }, 4800);
+            };
+
+            const counts = {
+                total: nodes.length,
+                success: nodes.filter(n => n.state === 'SUCCESS').length,
+                running: nodes.filter(n => n.state === 'RUNNING').length,
+                pending: nodes.filter(n => n.state === 'PENDING').length
+            };
+
+            return (
+                <div>
+                    <div className="header">
+                        <div>
+                            <div className="title">Distributed Job Scheduler & Workflow Engine</div>
+                            <div className="subtitle">Live Telemetry & In-Memory DAG Execution Monitoring</div>
+                        </div>
+                        <button className="btn" onClick={triggerRun} disabled={isRunning}>
+                            {isRunning ? 'Execution In Progress...' : 'Trigger Workflow Run'}
+                        </button>
+                    </div>
+
+                    <div className="stats-row">
+                        <div className="stat-badge">
+                            <div className="stat-val">{counts.total}</div>
+                            <div className="stat-lbl">Total Tasks</div>
+                        </div>
+                        <div className="stat-badge">
+                            <div className="stat-val" style={{ color: '#4ade80' }}>{counts.success}</div>
+                            <div className="stat-lbl">Completed</div>
+                        </div>
+                        <div className="stat-badge">
+                            <div className="stat-val" style={{ color: '#fbbf24' }}>{counts.running}</div>
+                            <div className="stat-lbl">Running</div>
+                        </div>
+                        <div className="stat-badge">
+                            <div className="stat-val" style={{ color: '#94a3b8' }}>{counts.pending}</div>
+                            <div className="stat-lbl">Pending</div>
+                        </div>
+                    </div>
+
+                    <div className="grid">
+                        <div className="card">
+                            <div className="card-title">Live DAG Graph Visualizer (Custom SVG)</div>
+                            <div className="svg-container">
+                                <svg width="100%" height="100%" viewBox="0 0 620 420">
+                                    <defs>
+                                        <marker id="arrow" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                            <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+                                        </marker>
+                                    </defs>
+
+                                    {/* Directed Connection Edges */}
+                                    {edges.map((e, idx) => {
+                                        const s = nodes.find(n => n.id === e.from);
+                                        const t = nodes.find(n => n.id === e.to);
+                                        if (!s || !t) return null;
+                                        return (
+                                            <line
+                                                key={idx}
+                                                x1={s.x}
+                                                y1={s.y}
+                                                x2={t.x}
+                                                y2={t.y}
+                                                stroke="#334155"
+                                                strokeWidth="2.5"
+                                                markerEnd="url(#arrow)"
+                                            />
+                                        );
+                                    })}
+
+                                    {/* Interactive SVG DAG Nodes */}
+                                    {nodes.map(n => (
+                                        <g key={n.id} transform={`translate(${n.x}, ${n.y})`}>
+                                            <circle r="22" className={`node-circle state-${n.state}`} strokeWidth="3" />
+                                            <text y="38" textAnchor="middle" fill="#f8fafc" fontSize="13" fontWeight="600">{n.name}</text>
+                                            <text y="-28" textAnchor="middle" fill="#94a3b8" fontSize="11" uppercase>{n.state}</text>
+                                        </g>
+                                    ))}
+                                </svg>
+                            </div>
+                        </div>
+
+                        <div className="card">
+                            <div className="card-title">Live Scheduler Telemetry Logs</div>
+                            <div className="console">
+                                {logs.map((l, idx) => (
+                                    <div key={idx} className="log-line">
+                                        <span className="log-ts">[{l.ts}]</span>
+                                        <span className={`log-tag ${l.tag === 'SUCCESS' ? 'log-success' : ''}`}>{l.tag}:</span>
+                                        {l.msg}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<DashboardApp />);
+    </script>
+</body>
+</html>
